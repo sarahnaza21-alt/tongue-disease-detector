@@ -1,5 +1,5 @@
 streamlit
 numpy
 Pillow
-tensorflow==2.15.0
+tflite-runtime
 gdown
