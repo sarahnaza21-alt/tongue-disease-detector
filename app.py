@@ -2,7 +2,7 @@ import streamlit as st
 import numpy as np
 import json
 from PIL import Image
-import tensorflow as tf
+import tflite_runtime.interpreter as tflite
 import os
 import gdown
 
@@ -14,13 +14,15 @@ st.set_page_config(
 
 @st.cache_resource
 def load_model():
-    if not os.path.exists("best_model_final.keras"):
+    if not os.path.exists("model.tflite"):
         gdown.download(
             "https://drive.google.com/uc?id=1qfGdMOITkEo2hYPWuETQM7jRdYbL2cJh",
-            "best_model_final.keras",
+            "model.tflite",
             quiet=False
         )
-    return tf.keras.models.load_model("best_model_final.keras")
+    interpreter = tflite.Interpreter(model_path="model.tflite")
+    interpreter.allocate_tensors()
+    return interpreter
 
 @st.cache_data
 def load_labels():
@@ -35,14 +37,16 @@ LABEL_MAP = {
 }
 IMG_SIZE = (224, 224)
 
-model   = load_model()
+interpreter = load_model()
 idx2cls = load_labels()
+
+input_details = interpreter.get_input_details()
+output_details = interpreter.get_output_details()
 
 st.title("Deteksi Penyakit Lidah")
 st.write("Gunakan kamera atau upload foto lidah untuk dianalisis.")
 
 tab_kamera, tab_upload = st.tabs(["📷 Kamera", "📁 Upload File"])
-
 image = None
 
 with tab_kamera:
@@ -58,24 +62,22 @@ with tab_upload:
 if image:
     st.image(image, caption="Gambar yang digunakan", use_container_width=True)
 
-    img_resized = image.resize(IMG_SIZE)
-    img_array   = np.array(img_resized) / 255.0
-    img_batch   = np.expand_dims(img_array, axis=0)
+    img_array = np.array(image.resize(IMG_SIZE), dtype=np.float32) / 255.0
+    img_batch = np.expand_dims(img_array, axis=0)
 
     with st.spinner("Menganalisis..."):
-        probs      = model.predict(img_batch, verbose=0)[0]
-        pred_idx   = int(np.argmax(probs))
-        pred_cls   = idx2cls[pred_idx]
+        interpreter.set_tensor(input_details[0]['index'], img_batch)
+        interpreter.invoke()
+        probs = interpreter.get_tensor(output_details[0]['index'])[0]
+        pred_idx = int(np.argmax(probs))
+        pred_cls = idx2cls[pred_idx]
         confidence = float(probs[pred_idx])
 
     st.success(f"**Hasil:** {LABEL_MAP[pred_cls]}")
     st.metric("Tingkat Kepercayaan", f"{confidence:.1%}")
 
     st.subheader("Distribusi Probabilitas")
-    prob_dict = {
-        LABEL_MAP[idx2cls[i]]: float(probs[i])
-        for i in range(len(probs))
-    }
+    prob_dict = {LABEL_MAP[idx2cls[i]]: float(probs[i]) for i in range(len(probs))}
     st.bar_chart(prob_dict)
 
     if confidence < 0.7:
